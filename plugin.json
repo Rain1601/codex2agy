@@ -1,7 +1,7 @@
 {
   "name": "codex2agy",
   "displayName": "Codex to Antigravity Migrator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "logo": "assets/logo.png",
   "description": "Interactively scan, compare, and safely sync Codex prompts, skills, memory summaries, compatible local plugins/MCP servers, and matching project sessions into Antigravity without overwriting existing items.",
   "author": {

@@ -77,6 +77,7 @@ BUILTIN_CODEX_MARKETPLACES = {
     "openai-curated-remote",
 }
 INTERNAL_AGY_PROJECT_NAMES = {"swarm/swarm_board"}
+SELF_SKILL_NAMES = {"codex2agy"}
 
 
 def expand(path: str) -> str:
@@ -385,6 +386,8 @@ def scan_skills(codex_home: str, agents_home: str, existing: Dict[str, Any]) -> 
                             skipped_system.append(f".system/{s}")
                 continue
             if not os.path.isdir(full) or not os.path.exists(os.path.join(full, "SKILL.md")):
+                continue
+            if entry in SELF_SKILL_NAMES:
                 continue
             info = inspect_skill_dir(full, group, fallback_name=entry)
             name = info["name"]

@@ -12,6 +12,13 @@ description: >-
 
 Migrate user assets from `~/.codex/` (and `~/.agents/skills/`) into the dedicated Antigravity plugin `~/.gemini/config/plugins/codex-imported/` (**never ask the user to confirm the target plugin name** unless they explicitly ask to rename it), and sync projects + conversations via `ConversationService`.
 
+## Post-Install & First-Run Auto-Start (CRITICAL)
+
+If the user just installed `codex2agy` (for example via an AgentBuddy install prompt saying *"安装完成后基于该 skill 的元数据协助我完成后续配置"* / *"help me configure after installation"*):
+- **Step 1 (`scan_codex.py`) is 100% read-only and makes zero environment changes.**
+- **NEVER stop after reading `SKILL.md` to ask in plain text *"Should I run the read-only scan now?"*.**
+- Immediately run Step 1 (`scan_codex.py --pretty`) using the scripts located next to this `SKILL.md`, and immediately present Step 2 using the native **`ask_question`** 5-tab option cards so the user gets an instant interactive approval flow before any write happens.
+
 ## Hard Guarantees (Enforced in Code)
 
 1. **Read-only on source**: Never edit, move, or delete anything under `~/.codex/` or `~/.agents/`.
