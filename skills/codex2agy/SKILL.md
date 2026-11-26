@@ -83,17 +83,17 @@ Only include a tab if that category has discovered items:
      - `Sync compatible 3rd-party plugin Skills/MCP only (M)`
      - `Skip`
 
-3. **Tab 3 — Memory (`is_multi_select: false`)** *(only if Codex memory files found)*:
-   - ZH: `记忆（Memory）如何处理？（Antigravity 无原生 MEMORY.md 导入接口）`
-     - `(Recommended) 不迁移（跳过）`
-     - `迁入精炼摘要（转为 ≤24KB 按需加载规则）`
-     - `生成只读检索 Skill（不复制大文件，按需读取 ~/.codex/memories/）`
-     - `两者都要（摘要规则 + 只读检索 Skill）`
-   - EN: `How should Codex Memory be handled? (No native MEMORY.md import)`
-     - `(Recommended) Skip memory`
-     - `Migrate compact summaries as on-demand Rules (<=24KB)`
-     - `Create read-only lookup Skill (reads ~/.codex/memories/ on demand)`
-     - `Both summary Rules and lookup Skill`
+3. **Tab 3 — Memory (`is_multi_select: false`)** *(only if Codex memory files found — write natural, outcome-first labels so the user knows what to pick at a glance)*:
+   - ZH: `记忆（Memory）想怎么处理？`
+     - `(Recommended) 不迁移 — 想从零开始、保持最干净，以后用 /learn 现教`
+     - `迁入精炼摘要 — 想让我一上来就懂你的习惯（聊到相关事情时自动生效）`
+     - `只读检索 Skill — 平时不打扰，偶尔想翻“以前在 Codex 怎么弄的”再去查`
+     - `两者都要 — 既延续习惯又不丢历史，嫌烦随时可在插件页一键关掉`
+   - EN: `How should we handle your Codex memory?`
+     - `(Recommended) Skip — start fresh and clean, teach habits later with /learn`
+     - `Import compact summaries — pick up your habits right away when relevant`
+     - `Read-only lookup Skill — stay out of the way unless you ask to check old Codex notes`
+     - `Both — keep habits and searchable history (can toggle off anytime in the plugin)`
 
 4. **Tab 4 — Same-Path Existing Projects (`is_multi_select: false`)** *(dedicated tab! Only if `projects.existing_same_path` is non-empty)*:
    - Default behavior: **import new (unmigrated) active sessions** into the matching existing Antigravity projects.
