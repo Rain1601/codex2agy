@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-0 m-0">
+  <div id="app" class="py-2 space-y-3 text-xs"></div>
+
+  <script>
+    // Replace __RESULT_JSON__ with the JSON output from apply_migration.py,
+    // and __LANG__ with "zh" or "en".
+    const RESULT = __RESULT_JSON__;
+    const LANG = "__LANG__";
+
+    const I18N = {
+      zh: {
+        committed: "迁移完成",
+        dry_run: "演练完成 (未写入)",
+        interrupted_rolled_back: "已中断并自动撤销",
+        failed_rolled_back: "异常并已自动撤销",
+        runId: "批次号",
+        created: "新增写入",
+        skipped: "防重跳过",
+        projects: "项目 / 会话",
+        warnings: "提示",
+        tabCreated: "已同步",
+        tabSkipped: "已跳过 (防重)",
+        tabProjects: "项目会话",
+        empty: "无记录",
+        undoHint: "随时可撤回本次迁移：",
+        copyUndo: "复制撤回命令",
+        copied: "已复制",
+        kindLabels: {
+          plugin_manifest: "插件清单",
+          rule: "提示词规则",
+          prompt_skill: "提示词技能",
+          skill: "Skill",
+          memory_rule: "记忆摘要规则",
+          memory_lookup_skill: "记忆检索 Skill",
+          mcp: "MCP 服务",
+          agy_project: "新建 Project",
+          project_thread: "项目会话"
+        }
+      },
+      en: {
+        committed: "Migration Complete",
+        dry_run: "Dry Run Complete (No Writes)",
+        interrupted_rolled_back: "Interrupted · Auto-Rolled Back",
+        failed_rolled_back: "Failed · Auto-Rolled Back",
+        runId: "Run ID",
+        created: "Created",
+        skipped: "Skipped (Dedup)",
+        projects: "Projects / Sessions",
+        warnings: "Warnings",
+        tabCreated: "Synced",
+        tabSkipped: "Skipped",
+        tabProjects: "Projects & Sessions",
+        empty: "None",
+        undoHint: "Undo this run anytime:",
+        copyUndo: "Copy undo cmd",
+        copied: "Copied",
+        kindLabels: {
+          plugin_manifest: "Plugin Manifest",
+          rule: "Prompt Rule",
+          prompt_skill: "Prompt Skill",
+          skill: "Skill",
+          memory_rule: "Memory Rule",
+          memory_lookup_skill: "Memory Lookup Skill",
+          mcp: "MCP Server",
+          agy_project: "New Project",
+          project_thread: "Project Session"
+        }
+      }
+    };
+
+    const t = I18N[LANG === "zh" ? "zh" : "en"];
+    const created = (RESULT.created || []).filter(x => x.kind !== "plugin_manifest");
+    const skipped = [...(RESULT.skipped_existing || []), ...(RESULT.skipped_idempotent || [])];
+    const warnings = RESULT.warnings || [];
+    const projCreated = created.filter(x => x.kind === "agy_project" || x.kind === "project_thread");
+    const otherCreated = created.filter(x => x.kind !== "agy_project" && x.kind !== "project_thread");
+    const status = RESULT.status || "committed";
+
+    const statusBadgeClass =
+      status === "committed"
+        ? "bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/30"
+        : status === "dry_run"
+        ? "bg-[var(--primary)]/15 text-[var(--primary)] border-[var(--primary)]/30"
+        : "bg-[var(--warning)]/15 text-[var(--warning)] border-[var(--warning)]/30";
+
+    const undoCmd = `codex2agy undo --run-id ${RESULT.run_id || ""}`;
+    let activeTab = "created";
+
+    function escapeHtml(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderRows(items, mode) {
+      if (!items.length) {
+        return `<div class="py-4 text-center text-[var(--muted-foreground)]">${t.empty}</div>`;
+      }
+      return items.slice(0, 40).map(item => {
+        const label = t.kindLabels[item.kind] || item.kind || "";
+        const title = item.title || item.name || item.thread_id || item.path || "";
+        const meta = mode === "skipped"
+          ? (item.reason || "")
+          : (item.project ? `${item.project}${item.archived ? " · archived" : ""}` : (item.mode || ""));
+        return `
+          <div class="flex items-center justify-between gap-2 py-1.5 border-b border-[var(--card-border)]/60 last:border-0">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="shrink-0 px-1.5 py-0.5 rounded bg-[var(--secondary)] text-[var(--secondary-foreground)] font-medium">${escapeHtml(label)}</span>
+              <span class="truncate text-[var(--foreground)]" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+            </div>
+            ${meta ? `<span class="shrink-0 text-[var(--muted-foreground)] truncate max-w-[160px]">${escapeHtml(meta)}</span>` : ""}
+          </div>
+        `;
+      }).join("");
+    }
+
+    function render() {
+      const tabData = activeTab === "created" ? otherCreated : activeTab === "projects" ? projCreated : skipped;
+      document.getElementById("app").innerHTML = `
+        <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--card-border)]">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded-full border font-semibold ${statusBadgeClass}">${escapeHtml(t[status] || status)}</span>
+            <span class="font-mono text-[var(--muted-foreground)]">${t.runId}: <strong class="text-[var(--foreground)]">${escapeHtml(RESULT.run_id || "-")}</strong></span>
+          </div>
+          <button id="copyBtn" class="px-2 py-1 rounded border border-[var(--card-border)] bg-[var(--card)] hover:bg-[var(--accent)] text-[var(--foreground)] transition cursor-pointer">
+            ${t.copyUndo}
+          </button>
+        </div>
+
+        <div class="grid grid-cols-4 gap-2">
+          <div class="rounded-lg border border-[var(--card-border)] bg-[var(--card)] px-2.5 py-2">
+            <div class="text-[var(--muted-foreground)]">${t.created}</div>
+            <div class="text-base font-bold tabular-nums text-[var(--success)] mt-0.5">${created.length}</div>
+          </div>
+          <div class="rounded-lg border border-[var(--card-border)] bg-[var(--card)] px-2.5 py-2">
+            <div class="text-[var(--muted-foreground)]">${t.projects}</div>
+            <div class="text-base font-bold tabular-nums text-[var(--primary)] mt-0.5">${projCreated.length}</div>
+          </div>
+          <div class="rounded-lg border border-[var(--card-border)] bg-[var(--card)] px-2.5 py-2">
+            <div class="text-[var(--muted-foreground)]">${t.skipped}</div>
+            <div class="text-base font-bold tabular-nums text-[var(--foreground)] mt-0.5">${skipped.length}</div>
+          </div>
+          <div class="rounded-lg border border-[var(--card-border)] bg-[var(--card)] px-2.5 py-2">
+            <div class="text-[var(--muted-foreground)]">${t.warnings}</div>
+            <div class="text-base font-bold tabular-nums ${warnings.length ? "text-[var(--warning)]" : "text-[var(--muted-foreground)]"} mt-0.5">${warnings.length}</div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-1.5 border-b border-[var(--card-border)] pb-1.5">
+          ${[
+            ["created", `${t.tabCreated} (${otherCreated.length})`],
+            ["projects", `${t.tabProjects} (${projCreated.length})`],
+            ["skipped", `${t.tabSkipped} (${skipped.length})`]
+          ].map(([key, label]) => `
+            <button data-tab="${key}" class="tab-btn px-2.5 py-1 rounded-md font-medium transition cursor-pointer ${
+              activeTab === key
+                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                : "text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+            }">${label}</button>
+          `).join("")}
+        </div>
+
+        <div class="max-h-[190px] overflow-y-auto pr-1">
+          ${renderRows(tabData, activeTab)}
+        </div>
+
+        <div class="pt-1.5 border-t border-[var(--card-border)] flex items-center justify-between text-[var(--muted-foreground)]">
+          <span>${t.undoHint} <code class="text-[var(--code-foreground)]">${escapeHtml(undoCmd)}</code></span>
+        </div>
+      `;
+
+      document.querySelectorAll(".tab-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          activeTab = btn.getAttribute("data-tab");
+          render();
+        });
+      });
+
+      const copyBtn = document.getElementById("copyBtn");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", () => {
+          navigator.clipboard && navigator.clipboard.writeText(undoCmd);
+          copyBtn.textContent = t.copied;
+          setTimeout(() => { copyBtn.textContent = t.copyUndo; }, 1500);
+        });
+      }
+    }
+
+    render();
+  </script>
+</body>
+</html>

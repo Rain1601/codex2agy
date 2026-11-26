@@ -39,6 +39,17 @@ class MigrationInterrupted(BaseException):
     """Raised when SIGINT/SIGTERM is received during migration."""
 
 
+def emit_progress(stage: str, message: str, current: Optional[int] = None, total: Optional[int] = None) -> None:
+    """Stream real-time progress lines to stderr without polluting stdout JSON."""
+    if current is not None and total is not None and total > 0:
+        pct = int((current / total) * 100)
+        line = f"[codex2agy][{stage}] ({current}/{total} · {pct}%) {message}"
+    else:
+        line = f"[codex2agy][{stage}] {message}"
+    sys.stderr.write(line + "\n")
+    sys.stderr.flush()
+
+
 def expand(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))
 
@@ -541,7 +552,11 @@ def main() -> int:
                     result["created"].append({"kind": "plugin_manifest", "path": plugin_json_path})
 
                 # 1. Prompts & AGENTS.md
-                for p in plan.get("prompts") or []:
+                prompt_items = plan.get("prompts") or []
+                if prompt_items:
+                    emit_progress("prompts", f"Syncing {len(prompt_items)} prompt/instruction item(s)...")
+                for idx_p, p in enumerate(prompt_items, 1):
+                    emit_progress("prompts", f"Processing {p.get('name') or p.get('target_name')}", idx_p, len(prompt_items))
                     kind = p.get("kind")
                     src = expand(p["source_path"])
                     if not os.path.isfile(src):
@@ -588,7 +603,11 @@ def main() -> int:
                         result["created"].append({"kind": "prompt_skill", "name": sname, "path": dest_md})
 
                 # 2. Skills (Codex/Agents + 3rd-party plugin skills)
-                for s in plan.get("skills") or []:
+                skill_items = plan.get("skills") or []
+                if skill_items:
+                    emit_progress("skills", f"Syncing {len(skill_items)} skill(s)...")
+                for idx_s, s in enumerate(skill_items, 1):
+                    emit_progress("skills", f"Skill {s['name']}", idx_s, len(skill_items))
                     sname = s["name"]
                     src_dir = expand(s["source_path"])
                     dest_dir = os.path.join(target_dir, "skills", sname)
@@ -654,6 +673,7 @@ def main() -> int:
                 # 4. MCP servers (merge without overwriting existing server names)
                 mcp_items = plan.get("mcp_servers") or []
                 if mcp_items:
+                    emit_progress("mcp", f"Configuring {len(mcp_items)} MCP server(s)...")
                     mcp_path = os.path.join(target_dir, "mcp_config.json")
                     mcp_existed_before = os.path.isfile(mcp_path)
                     current_mcp: Dict[str, Any] = {"mcpServers": {}}
@@ -726,9 +746,16 @@ def main() -> int:
                                     return pdata.get("id") or os.path.splitext(fn)[0], pdata.get("name") or ""
                     return None
 
-                for pm in plan.get("project_migrations") or []:
+                proj_list = plan.get("project_migrations") or []
+                total_proj_threads = sum(len(pm.get("threads") or []) for pm in proj_list)
+                done_proj_threads = 0
+                if proj_list:
+                    emit_progress("projects", f"Syncing {len(proj_list)} project(s), {total_proj_threads} session(s)...")
+
+                for pm in proj_list:
                     agy_pid = pm.get("agy_project_id")
                     agy_pname = pm["agy_project_name"]
+                    emit_progress("projects", f"Project '{agy_pname}' ({len(pm.get('threads') or [])} sessions)")
                     create_proj = bool(pm.get("create_project", False))
                     proj_roots = pm.get("project_roots") or []
                     git_branch = pm.get("git_default_branch")
@@ -799,8 +826,10 @@ def main() -> int:
                     imported_ids = list_imported_codex_thread_ids_by_project(agy_pid) if agy_pid else set()
 
                     for t in pm.get("threads") or []:
+                        done_proj_threads += 1
                         tid = t["thread_id"]
                         title = (t.get("title") or f"Codex {tid[:8]}").strip()[:100]
+                        emit_progress("sessions", f"{agy_pname}: {title[:45]}", done_proj_threads, total_proj_threads)
                         archived = bool(t.get("archived", False))
                         pinned = bool(t.get("is_pinned", False))
                         mode = archived_mode if archived else active_mode
@@ -935,6 +964,7 @@ def main() -> int:
                 return 0
 
             except (MigrationInterrupted, KeyboardInterrupt) as exc:
+                emit_progress("rollback", f"Interrupted ({exc}) — auto-rolling back...")
                 if not dry_run and ledger is not None and rollback_on_interrupt:
                     rb = rollback_run(
                         ledger,
