@@ -38,12 +38,13 @@ If `incomplete_runs` is non-empty, alert the user and offer to roll back that in
 
 ---
 
-## Step 2: Present Findings & Collect User Confirmation (Self-Explanatory, Zero Jargon)
+## Step 2: Present Findings & Collect User Confirmation (Bilingual EN/ZH, Self-Explanatory)
 
 **UX Rules for presenting Step 2 (CRITICAL):**
+- **Match the user's language automatically** (respond in Chinese if the user wrote Chinese; respond in English if the user wrote English).
 - **Do NOT ask the user to confirm the target plugin name** (`codex-imported` is automatic; only mention in passing that migrated items go into an isolated reversible plugin).
-- **Never use cryptic option numbers like "或选 2 / 3 / 4" without spelling out what each choice does in plain words.** Every selectable option must be self-explanatory at a glance.
-- **Keep the confirmation concise and scannable** so the user can either reply `按默认执行` in one second or state specific adjustments clearly.
+- **Never use cryptic option numbers like "pick 2 / 3 / 4" without spelling out what each choice does in plain words.** Every selectable option must be self-explanatory at a glance.
+- **Keep the confirmation concise and scannable** so the user can either reply `按默认执行` / `Proceed with defaults` in one second or state specific adjustments clearly.
 
 Present these **5 sections** with their exact defaults:
 
@@ -73,14 +74,21 @@ Use pure path-based matching — no confusing "same-name different-path" guesswo
   - 未归档会话默认 **可续聊模式**（导出完整 Markdown 档案 + 侧边栏创建带上下文交接的会话，点开即可接着聊；也可改选“轻量模式：零模型消耗仅建标题”或“仅导出 Markdown 档案”）。
   - 若用户额外勾选 **已归档会话**，默认使用 **轻量归档模式**（导出完整 Markdown 档案 + 侧边栏建标题会话并保持 `archived: true`，零模型消耗）。
 
-### Confirmation Prompt Template
-End Step 2 with a crisp summary box so the user never has to scroll back up to decode numbers:
+### Confirmation Prompt Templates (Use Matching Language)
 
+**Chinese template (中文用户):**
 > **请确认是否开始迁移**（直接回复 **`按默认执行`** 即可，或说明想调整的项）：
 > - **提示词（`AGENTS.md`）**：默认 **不迁移**（要迁请说“迁提示词”）
 > - **Skills（N 个）& 第三方插件/MCP（M 项）**：默认 **全选**（有要排除的请点名）
 > - **记忆（Memory）**：默认 **不迁移**（可选：**迁入精炼摘要** / **生成只读检索 Skill** / **两者都要**）
 > - **项目与会话**：默认同步上述 **同路径已有项目 + Codex 独有项目（自动新建）** 的 **未归档会话（可续聊模式）**；**已归档会话默认不迁**（要一起迁请说“包含已归档”，或点名只迁哪几个项目）
+
+**English template (English users):**
+> **Confirm Migration Plan** (reply **`Proceed with defaults`** to start, or mention any adjustments):
+> - **Prompts (`AGENTS.md`)**: Default **skip** (say "include prompts" to migrate)
+> - **Skills (N) & 3rd-Party Plugins/MCP (M)**: Default **all selected** (name any you want excluded; duplicates auto-skipped)
+> - **Memory**: Default **skip** (options: **migrate summary rules** / **create read-only lookup skill** / **both**)
+> - **Projects & Sessions**: Default sync **active (unarchived) sessions** for all listed **same-path existing projects + Codex-only local projects (auto-created in Antigravity)** using **continuable context mode**; **archived sessions default to skip** (say "include archived" to import them in lightweight archived mode)
 
 Wait for explicit user confirmation before Step 3.
 
