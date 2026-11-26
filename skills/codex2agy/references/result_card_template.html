@@ -3,9 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    .font-editorial {
+      font-family: ui-serif, Georgia, Cambria, "New York", "Songti SC", "STSong", "Noto Serif SC", serif;
+    }
+    .thin-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .thin-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .thin-scroll::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--muted-foreground) 22%, transparent);
+      border-radius: 9999px;
+    }
+  </style>
 </head>
 <body class="bg-transparent text-[var(--foreground)] antialiased p-0 m-0">
-  <div id="app" class="py-1.5 space-y-3 text-xs select-none"></div>
+  <div id="app" class="py-2.5 px-1 space-y-4 text-xs select-none"></div>
 
   <script>
     // Replace __RESULT_JSON__ with the JSON output from apply_migration.py,
@@ -15,61 +30,59 @@
 
     const I18N = {
       zh: {
-        committed: "同步完成",
-        dry_run: "演练预览",
-        interrupted_rolled_back: "已中断 · 自动撤销",
-        failed_rolled_back: "异常 · 已自动撤销",
+        committed: "迁移已完成",
+        dry_run: "演练预览（未写入）",
+        interrupted_rolled_back: "已中断并自动回滚",
+        failed_rolled_back: "执行异常 · 已自动回滚",
         created: "新增同步",
         projects: "项目与会话",
         skipped: "防重跳过",
-        warnings: "注意事项",
+        warnings: "提示项",
         tabCreated: "技能与配置",
         tabProjects: "项目会话",
-        tabSkipped: "防重跳过",
-        empty: "暂无记录",
-        undoHint: "撤回命令",
+        tabSkipped: "已跳过",
+        empty: "当前分类下无记录",
         copyUndo: "复制撤回命令",
-        copied: "已复制 ✓",
+        copied: "已复制",
         archived: "已归档",
         kindLabels: {
-          plugin_manifest: "清单",
-          rule: "规则",
-          prompt_skill: "提示词",
-          skill: "Skill",
-          memory_rule: "记忆",
-          memory_lookup_skill: "记忆检索",
+          plugin_manifest: "MANIFEST",
+          rule: "RULE",
+          prompt_skill: "PROMPT",
+          skill: "SKILL",
+          memory_rule: "MEMORY",
+          memory_lookup_skill: "LOOKUP",
           mcp: "MCP",
-          agy_project: "新建项目",
-          project_thread: "会话"
+          agy_project: "PROJECT",
+          project_thread: "SESSION"
         }
       },
       en: {
-        committed: "Synced",
-        dry_run: "Dry Run",
-        interrupted_rolled_back: "Interrupted · Undone",
-        failed_rolled_back: "Failed · Undone",
-        created: "Synced",
-        projects: "Projects & Chats",
-        skipped: "Skipped",
+        committed: "Migration Complete",
+        dry_run: "Dry Run Preview",
+        interrupted_rolled_back: "Interrupted · Rolled Back",
+        failed_rolled_back: "Failed · Rolled Back",
+        created: "Newly Synced",
+        projects: "Projects & Sessions",
+        skipped: "Duplicates Skipped",
         warnings: "Notices",
         tabCreated: "Skills & Config",
-        tabProjects: "Projects & Chats",
+        tabProjects: "Projects & Sessions",
         tabSkipped: "Skipped",
-        empty: "No items",
-        undoHint: "Undo",
-        copyUndo: "Copy undo",
-        copied: "Copied ✓",
+        empty: "Nothing in this view",
+        copyUndo: "Copy undo command",
+        copied: "Copied",
         archived: "archived",
         kindLabels: {
-          plugin_manifest: "Manifest",
-          rule: "Rule",
-          prompt_skill: "Prompt",
-          skill: "Skill",
-          memory_rule: "Memory",
-          memory_lookup_skill: "Lookup",
+          plugin_manifest: "MANIFEST",
+          rule: "RULE",
+          prompt_skill: "PROMPT",
+          skill: "SKILL",
+          memory_rule: "MEMORY",
+          memory_lookup_skill: "LOOKUP",
           mcp: "MCP",
-          agy_project: "New Project",
-          project_thread: "Chat"
+          agy_project: "PROJECT",
+          project_thread: "SESSION"
         }
       }
     };
@@ -82,20 +95,8 @@
     const otherCreated = created.filter(x => x.kind !== "agy_project" && x.kind !== "project_thread");
     const status = RESULT.status || "committed";
 
-    const statusDot =
-      status === "committed"
-        ? "bg-[var(--success)]"
-        : status === "dry_run"
-        ? "bg-[var(--primary)]"
-        : "bg-[var(--warning)]";
-
-    const statusPill =
-      status === "committed"
-        ? "bg-[var(--success)]/12 text-[var(--success)]"
-        : status === "dry_run"
-        ? "bg-[var(--primary)]/12 text-[var(--primary)]"
-        : "bg-[var(--warning)]/12 text-[var(--warning)]";
-
+    // Restrained Anthropic terracotta accent (#D97757) for active/healthy state; muted amber for rollback
+    const accentHex = (status === "committed" || status === "dry_run") ? "#D97757" : "#C98A42";
     const undoCmd = `codex2agy undo --run-id ${RESULT.run_id || ""}`;
     let activeTab = otherCreated.length ? "created" : (projCreated.length ? "projects" : "skipped");
 
@@ -107,29 +108,23 @@
         .replace(/"/g, "&quot;");
     }
 
-    function pillColor(kind) {
-      if (kind === "mcp") return "bg-[var(--primary)]/12 text-[var(--primary)]";
-      if (kind === "agy_project") return "bg-[var(--success)]/12 text-[var(--success)]";
-      return "bg-[var(--secondary)] text-[var(--muted-foreground)]";
-    }
-
     function renderRows(items, mode) {
       if (!items.length) {
-        return `<div class="py-6 text-center text-[var(--muted-foreground)]">${t.empty}</div>`;
+        return `<div class="py-7 text-center text-[var(--muted-foreground)] opacity-70 italic font-editorial text-sm">${t.empty}</div>`;
       }
-      return items.slice(0, 40).map(item => {
-        const label = t.kindLabels[item.kind] || item.kind || "";
+      return items.slice(0, 50).map(item => {
+        const label = t.kindLabels[item.kind] || String(item.kind || "").toUpperCase();
         const title = item.title || item.name || item.thread_id || item.path || "";
         const meta = mode === "skipped"
           ? (item.reason || "")
           : (item.project ? `${item.project}${item.archived ? ` · ${t.archived}` : ""}` : "");
         return `
-          <div class="flex items-center justify-between gap-3 px-2.5 py-2 rounded-xl hover:bg-[var(--secondary)]/55 transition-colors">
-            <div class="flex items-center gap-2.5 min-w-0">
-              <span class="shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${pillColor(item.kind)}">${esc(label)}</span>
-              <span class="truncate text-[var(--foreground)] font-medium" title="${esc(title)}">${esc(title)}</span>
+          <div class="group flex items-baseline justify-between gap-4 px-2.5 py-1.5 rounded-lg hover:bg-[var(--secondary)]/40 transition-colors">
+            <div class="flex items-baseline gap-3 min-w-0">
+              <span class="shrink-0 w-16 font-mono text-[10px] tracking-wider text-[var(--muted-foreground)] opacity-75">${esc(label)}</span>
+              <span class="truncate text-[13px] text-[var(--foreground)]" title="${esc(title)}">${esc(title)}</span>
             </div>
-            ${meta ? `<span class="shrink-0 text-[11px] text-[var(--muted-foreground)] truncate max-w-[160px]">${esc(meta)}</span>` : ""}
+            ${meta ? `<span class="shrink-0 text-[11px] text-[var(--muted-foreground)] opacity-75 truncate max-w-[180px]">${esc(meta)}</span>` : ""}
           </div>
         `;
       }).join("");
@@ -137,64 +132,67 @@
 
     function render() {
       const tabData = activeTab === "created" ? otherCreated : activeTab === "projects" ? projCreated : skipped;
+      const metrics = [
+        [t.created, created.length, true],
+        [t.projects, projCreated.length, false],
+        [t.skipped, skipped.length, false],
+        ...(warnings.length ? [[t.warnings, warnings.length, false]] : [])
+      ];
+
       document.getElementById("app").innerHTML = `
-        <!-- Seamless Header -->
-        <div class="flex items-center justify-between gap-2 px-0.5">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-medium ${statusPill}">
-              <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
-              ${esc(t[status] || status)}
-            </span>
-            <span class="font-mono text-[11px] text-[var(--muted-foreground)] truncate">${esc(RESULT.run_id || "")}</span>
+        <div class="rounded-2xl bg-[var(--card)]/65 px-5 py-4 space-y-4">
+          <!-- Editorial Header -->
+          <div class="flex items-baseline justify-between gap-3">
+            <div class="flex items-baseline gap-2.5 min-w-0">
+              <span class="inline-block w-2 h-2 rounded-full shrink-0 translate-y-[-1px]" style="background:${accentHex}"></span>
+              <h3 class="font-editorial text-[17px] font-normal tracking-tight text-[var(--foreground)] truncate">
+                ${esc(t[status] || status)}
+              </h3>
+              <span class="font-mono text-[11px] text-[var(--muted-foreground)] opacity-65 truncate">${esc(RESULT.run_id || "")}</span>
+            </div>
+            <button id="copyBtn" title="${esc(undoCmd)}" class="shrink-0 font-mono text-[11px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] px-2 py-0.5 rounded-md hover:bg-[var(--secondary)]/50 transition cursor-pointer">
+              ${t.copyUndo}
+            </button>
           </div>
-          <button id="copyBtn" class="shrink-0 px-2.5 py-1 rounded-full bg-[var(--secondary)]/75 hover:bg-[var(--secondary)] text-[var(--foreground)] font-medium transition cursor-pointer">
-            ${t.copyUndo}
-          </button>
-        </div>
 
-        <!-- Seamless Unified Metric Strip (Zero Borders) -->
-        <div class="grid grid-cols-4 gap-1 rounded-2xl bg-[var(--card)]/85 px-3 py-3">
-          <div class="px-1.5">
-            <div class="text-[11px] text-[var(--muted-foreground)]">${t.created}</div>
-            <div class="text-lg font-semibold tabular-nums tracking-tight text-[var(--success)] mt-0.5">${created.length}</div>
+          <!-- Editorial Serif Figures -->
+          <div class="flex flex-wrap items-baseline gap-x-8 gap-y-2 pt-0.5">
+            ${metrics.map(([label, val, highlight]) => `
+              <div class="flex items-baseline gap-2">
+                <span class="font-editorial text-[26px] leading-none font-normal tabular-nums tracking-tight" style="${highlight ? `color:${accentHex}` : ""}">
+                  ${val}
+                </span>
+                <span class="text-[11px] text-[var(--muted-foreground)]">${esc(label)}</span>
+              </div>
+            `).join("")}
           </div>
-          <div class="px-1.5">
-            <div class="text-[11px] text-[var(--muted-foreground)]">${t.projects}</div>
-            <div class="text-lg font-semibold tabular-nums tracking-tight text-[var(--primary)] mt-0.5">${projCreated.length}</div>
-          </div>
-          <div class="px-1.5">
-            <div class="text-[11px] text-[var(--muted-foreground)]">${t.skipped}</div>
-            <div class="text-lg font-semibold tabular-nums tracking-tight text-[var(--foreground)] mt-0.5">${skipped.length}</div>
-          </div>
-          <div class="px-1.5">
-            <div class="text-[11px] text-[var(--muted-foreground)]">${t.warnings}</div>
-            <div class="text-lg font-semibold tabular-nums tracking-tight ${warnings.length ? "text-[var(--warning)]" : "text-[var(--muted-foreground)]"} mt-0.5">${warnings.length}</div>
-          </div>
-        </div>
 
-        <!-- Seamless Segmented Pill Tabs -->
-        <div class="inline-flex items-center gap-1 rounded-xl bg-[var(--secondary)]/55 p-1">
-          ${[
-            ["created", t.tabCreated, otherCreated.length],
-            ["projects", t.tabProjects, projCreated.length],
-            ["skipped", t.tabSkipped, skipped.length]
-          ].map(([key, label, cnt]) => `
-            <button data-tab="${key}" class="tab-btn px-3 py-1 rounded-lg font-medium transition cursor-pointer ${
-              activeTab === key
-                ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm"
-                : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-            }">${label} <span class="opacity-65 tabular-nums ml-0.5">${cnt}</span></button>
-          `).join("")}
-        </div>
+          <!-- Minimalist Text Tabs with Warm Terracotta Indicator -->
+          <div class="flex items-center gap-5 pt-1">
+            ${[
+              ["created", t.tabCreated, otherCreated.length],
+              ["projects", t.tabProjects, projCreated.length],
+              ["skipped", t.tabSkipped, skipped.length]
+            ].map(([key, label, cnt]) => {
+              const active = activeTab === key;
+              return `
+                <button data-tab="${key}" class="tab-btn relative pb-1.5 text-[12px] transition cursor-pointer ${
+                  active
+                    ? "text-[var(--foreground)] font-medium"
+                    : "text-[var(--muted-foreground)] opacity-65 hover:opacity-100"
+                }">
+                  <span>${esc(label)}</span>
+                  <span class="font-mono text-[10px] opacity-60 ml-1 tabular-nums">${cnt}</span>
+                  ${active ? `<span class="absolute left-0 right-0 bottom-0 h-[1.5px] rounded-full" style="background:${accentHex}"></span>` : ""}
+                </button>
+              `;
+            }).join("")}
+          </div>
 
-        <!-- Borderless Clean List -->
-        <div class="max-h-[168px] overflow-y-auto space-y-0.5 pr-0.5">
-          ${renderRows(tabData, activeTab)}
-        </div>
-
-        <!-- Soft Seamless Footer -->
-        <div class="rounded-xl bg-[var(--secondary)]/40 px-3 py-2 flex items-center justify-between gap-2 text-[11px] text-[var(--muted-foreground)]">
-          <span class="truncate">${t.undoHint}：<code class="text-[var(--code-foreground)] select-all">${esc(undoCmd)}</code></span>
+          <!-- Quiet Editorial Item List -->
+          <div class="thin-scroll max-h-[164px] overflow-y-auto -mx-2.5 px-0.5 space-y-0.5">
+            ${renderRows(tabData, activeTab)}
+          </div>
         </div>
       `;
 
@@ -210,10 +208,10 @@
         copyBtn.addEventListener("click", () => {
           navigator.clipboard && navigator.clipboard.writeText(undoCmd);
           copyBtn.textContent = t.copied;
-          copyBtn.classList.add("text-[var(--success)]");
+          copyBtn.style.color = accentHex;
           setTimeout(() => {
             copyBtn.textContent = t.copyUndo;
-            copyBtn.classList.remove("text-[var(--success)]");
+            copyBtn.style.color = "";
           }, 1500);
         });
       }
