@@ -757,31 +757,69 @@ def load_agy_projects(gemini_config: str) -> List[Dict[str, Any]]:
     return projects
 
 
+def detect_git_default_branch(repo_dir: str) -> Optional[str]:
+    git_dir = os.path.join(repo_dir, ".git")
+    if not os.path.exists(git_dir):
+        return None
+    head_path = os.path.join(git_dir, "HEAD") if os.path.isdir(git_dir) else None
+    if head_path and os.path.isfile(head_path):
+        txt = safe_read_text(head_path, 256).strip()
+        if txt.startswith("ref: refs/heads/"):
+            return txt[len("ref: refs/heads/") :].strip() or "main"
+    return "main"
+
+
+def is_virtual_or_scratch_root(path: str) -> bool:
+    low = path.replace("\\", "/").lower()
+    return (
+        "/.codex/.chatgpt-projects/" in low
+        or "/scratch-workspaces/" in low
+        or "/.codex/worktrees/" in low
+        or "/tmp/" in low
+    )
+
+
 def scan_matching_projects(
     codex_home: str,
     gemini_config: str,
     target_plugin: str,
     ledger_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Match Codex projects/threads against existing Antigravity projects.
+    """Path-first project matching between Codex and Antigravity:
 
-    - exact_root: same local folder path (strong same-project match, default_selected=True)
-    - same_name: same project name (case-insensitive) with different or unbound root (shown for confirmation)
-    - Separates active (unarchived, default_selected=True) vs archived threads (default_selected=False).
-    - Auto-skips threads already synced in SQLite idempotency ledger, tagged in Antigravity, or exported on disk.
+    1. `existing_same_path` (default_selected=True):
+       Codex project shares the exact same local directory path as an existing Antigravity project.
+       -> Sync its sessions directly into that existing Antigravity project.
+    2. `new_codex_projects` (default_selected=True):
+       Codex project has a real local directory on disk that does NOT exist in Antigravity yet.
+       -> Create the corresponding Antigravity project automatically and sync its sessions.
+    3. `virtual_or_scratch_projects` (default_selected=False):
+       Codex projects pointing to virtual `.chatgpt-projects/` or temporary scratch folders.
+
+    Active threads default_selected=True; archived threads default_selected=False (optional).
     """
     agy_projects = load_agy_projects(gemini_config)
     ledger_synced = get_synced_session_ids(ledger_dir)
     state_db = os.path.join(codex_home, "state_5.sqlite")
     if sqlite3 is None or not os.path.isfile(state_db):
-        return {"matched_projects": [], "unmatched_codex_projects": []}
+        return {
+            "existing_same_path": [],
+            "new_codex_projects": [],
+            "virtual_or_scratch_projects": [],
+            "matched_projects": [],
+        }
 
     codex_projects: List[Dict[str, Any]] = []
     thread_rows: List[Tuple[Any, ...]] = []
     try:
         with open_codex_sqlite_readonly(state_db) as con:
             if con is None:
-                return {"matched_projects": [], "unmatched_codex_projects": []}
+                return {
+                    "existing_same_path": [],
+                    "new_codex_projects": [],
+                    "virtual_or_scratch_projects": [],
+                    "matched_projects": [],
+                }
             prows = con.execute("SELECT id, name FROM projects ORDER BY position ASC").fetchall()
             root_map: Dict[str, List[str]] = {}
             for pid, path in con.execute("SELECT project_id, path FROM project_roots ORDER BY position ASC").fetchall():
@@ -795,7 +833,6 @@ def scan_matching_projects(
                     "norm_roots": [norm_path(r) for r in roots if r],
                 })
 
-            # Fetch all top-level user threads (exclude subagent JSON sources and attached child threads)
             thread_rows = con.execute(
                 """
                 SELECT id, title, cwd, archived, is_pinned, source, rollout_path, updated_at, project_id
@@ -805,7 +842,12 @@ def scan_matching_projects(
                 """
             ).fetchall()
     except Exception:
-        return {"matched_projects": [], "unmatched_codex_projects": []}
+        return {
+            "existing_same_path": [],
+            "new_codex_projects": [],
+            "virtual_or_scratch_projects": [],
+            "matched_projects": [],
+        }
 
     all_threads: List[Dict[str, Any]] = []
     for tid, title, cwd, archived, is_pinned, source, rollout_path, updated_at, proj_id in thread_rows:
@@ -823,128 +865,139 @@ def scan_matching_projects(
             "codex_project_id": proj_id,
         })
 
-    def match_threads_for_project(
-        agy_proj: Dict[str, Any],
-        codex_proj: Optional[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        candidate_roots: Set[str] = set(agy_proj["norm_roots"])
-        if codex_proj:
-            candidate_roots.update(codex_proj["norm_roots"])
-        proj_basename = agy_proj["name"].lower()
-        codex_pid = codex_proj["id"] if codex_proj else None
+    # Map normalized root path -> existing Antigravity project
+    agy_by_root: Dict[str, Dict[str, Any]] = {}
+    agy_existing_names_lower: Set[str] = set()
+    for ap in agy_projects:
+        agy_existing_names_lower.add(ap["name"].lower())
+        for nr in ap["norm_roots"]:
+            agy_by_root[nr] = ap
 
+    def collect_threads_for_roots(codex_proj: Dict[str, Any], roots_norm: Set[str]) -> List[Dict[str, Any]]:
+        proj_basename = codex_proj["name"].lower()
+        codex_pid = codex_proj["id"]
         matched: List[Dict[str, Any]] = []
         seen_tids: Set[str] = set()
         for t in all_threads:
             hit = False
-            if codex_pid and t["codex_project_id"] == codex_pid:
+            if t["codex_project_id"] == codex_pid:
                 hit = True
-            elif t["norm_cwd"] and t["norm_cwd"] in candidate_roots:
+            elif t["norm_cwd"] and t["norm_cwd"] in roots_norm:
                 hit = True
-            elif t["cwd"]:
-                # Include Codex worktrees for the same repo basename (e.g. ~/.codex/worktrees/<wt>/<proj_name>)
-                norm_c = t["norm_cwd"]
-                if "/.codex/worktrees/" in norm_c and os.path.basename(norm_c).lower() == proj_basename:
-                    hit = True
-                # Include well-known sibling directory with exact same folder basename when Codex project root is a virtual .chatgpt-projects path
-                elif codex_proj and any("/.chatgpt-projects/" in r for r in codex_proj["roots"]):
-                    if os.path.basename(norm_c).lower() == proj_basename:
-                        hit = True
+            elif t["norm_cwd"] and "/.codex/worktrees/" in t["norm_cwd"] and os.path.basename(t["norm_cwd"]).lower() == proj_basename:
+                hit = True
             if hit and t["thread_id"] not in seen_tids:
                 seen_tids.add(t["thread_id"])
                 matched.append(t)
         return matched
 
-    matched_projects: List[Dict[str, Any]] = []
-    matched_codex_ids: Set[str] = set()
     export_base = os.path.join(gemini_config, "plugins", target_plugin, "project_imports")
+    existing_same_path: List[Dict[str, Any]] = []
+    new_codex_projects: List[Dict[str, Any]] = []
+    virtual_or_scratch: List[Dict[str, Any]] = []
 
-    for ap in agy_projects:
-        ap_name_low = ap["name"].lower()
-        ap_roots_set = set(ap["norm_roots"])
+    for cp in codex_projects:
+        roots = cp["roots"]
+        norm_roots = set(cp["norm_roots"])
 
-        best_cp: Optional[Dict[str, Any]] = None
-        match_type: Optional[str] = None
-
-        # Priority 1: exact root path match
-        for cp in codex_projects:
-            if ap_roots_set and (ap_roots_set & set(cp["norm_roots"])):
-                best_cp = cp
-                match_type = "exact_root"
+        # Priority 1: Does any root match an existing Antigravity project path?
+        matched_ap: Optional[Dict[str, Any]] = None
+        for nr in cp["norm_roots"]:
+            if nr in agy_by_root:
+                matched_ap = agy_by_root[nr]
                 break
 
-        # Priority 2: exact project name match (case-insensitive)
-        if not best_cp:
-            for cp in codex_projects:
-                if cp["name"].lower() == ap_name_low:
-                    best_cp = cp
-                    match_type = "same_name"
-                    break
+        raw_threads = collect_threads_for_roots(cp, norm_roots)
 
-        if not best_cp:
+        if matched_ap is not None:
+            agy_pid = matched_ap["id"]
+            agy_pname = matched_ap["name"]
+            imported_ids = list_imported_codex_thread_ids_by_project(agy_pid)
+            proj_export_dir = os.path.join(export_base, re.sub(r"[^A-Za-z0-9._-]+", "_", agy_pname))
+
+            active_m, archived_m, already_m = [], [], []
+            for t in raw_threads:
+                tid = t["thread_id"]
+                if tid in ledger_synced or tid in imported_ids or os.path.isfile(os.path.join(proj_export_dir, f"{tid}.md")):
+                    already_m.append(tid)
+                    continue
+                item = {k: t[k] for k in ("thread_id", "title", "cwd", "archived", "is_pinned", "source", "rollout_path", "rollout_exists", "updated_at")}
+                (archived_m if t["archived"] else active_m).append(item)
+
+            existing_same_path.append({
+                "action": "sync_into_existing_project",
+                "create_project": False,
+                "agy_project_id": agy_pid,
+                "agy_project_name": agy_pname,
+                "project_roots": matched_ap["roots"],
+                "codex_project_id": cp["id"],
+                "codex_project_name": cp["name"],
+                "default_selected": True,
+                "active_threads_default_selected": True,
+                "archived_threads_default_selected": False,
+                "active_threads_count": len(active_m),
+                "archived_threads_count": len(archived_m),
+                "already_migrated_count": len(already_m),
+                "active_threads": active_m,
+                "archived_threads": archived_m,
+            })
             continue
 
-        matched_codex_ids.add(best_cp["id"])
-        raw_threads = match_threads_for_project(ap, best_cp)
+        # Not matched by path -> check whether it's a real local directory vs virtual/scratch
+        real_roots = [r for r in roots if r and os.path.isdir(r) and not is_virtual_or_scratch_root(r)]
+        is_virtual = not real_roots
 
-        # Deduplicate against already imported conversations in Antigravity + exported transcripts
-        imported_ids = list_imported_codex_thread_ids_by_project(ap["id"])
-        proj_export_dir = os.path.join(export_base, re.sub(r"[^A-Za-z0-9._-]+", "_", ap["name"]))
+        # Choose a clean non-colliding display name if creating a new project in Antigravity
+        proposed_name = cp["name"]
+        if proposed_name.lower() in agy_existing_names_lower and real_roots:
+            parent_hint = os.path.basename(os.path.dirname(real_roots[0]))
+            folder_hint = os.path.basename(real_roots[0])
+            suffix = folder_hint if folder_hint.lower() != proposed_name.lower() else (parent_hint or "Codex")
+            proposed_name = f"{cp['name']} ({suffix})"
 
-        active_migratable: List[Dict[str, Any]] = []
-        archived_migratable: List[Dict[str, Any]] = []
-        already_migrated: List[str] = []
-
+        proj_export_dir = os.path.join(export_base, re.sub(r"[^A-Za-z0-9._-]+", "_", proposed_name))
+        active_m, archived_m, already_m = [], [], []
         for t in raw_threads:
             tid = t["thread_id"]
-            transcript_exists = os.path.isfile(os.path.join(proj_export_dir, f"{tid}.md"))
-            if tid in ledger_synced or tid in imported_ids or transcript_exists:
-                already_migrated.append(tid)
+            if tid in ledger_synced or os.path.isfile(os.path.join(proj_export_dir, f"{tid}.md")):
+                already_m.append(tid)
                 continue
-            item = {
-                "thread_id": tid,
-                "title": t["title"],
-                "cwd": t["cwd"],
-                "archived": t["archived"],
-                "is_pinned": t["is_pinned"],
-                "source": t["source"],
-                "rollout_path": t["rollout_path"],
-                "rollout_exists": t["rollout_exists"],
-                "updated_at": t["updated_at"],
-            }
-            if t["archived"]:
-                archived_migratable.append(item)
-            else:
-                active_migratable.append(item)
+            item = {k: t[k] for k in ("thread_id", "title", "cwd", "archived", "is_pinned", "source", "rollout_path", "rollout_exists", "updated_at")}
+            (archived_m if t["archived"] else active_m).append(item)
 
-        matched_projects.append({
-            "agy_project_id": ap["id"],
-            "agy_project_name": ap["name"],
-            "agy_roots": ap["roots"],
-            "codex_project_id": best_cp["id"],
-            "codex_project_name": best_cp["name"],
-            "codex_roots": best_cp["roots"],
-            "match_type": match_type,
-            "same_root": match_type == "exact_root",
-            "default_selected": match_type == "exact_root",
+        primary_root = real_roots[0] if real_roots else (roots[0] if roots else "")
+        git_branch = detect_git_default_branch(primary_root) if (real_roots and primary_root) else None
+
+        entry = {
+            "action": "create_new_project_and_sync" if not is_virtual else "virtual_or_scratch",
+            "create_project": not is_virtual,
+            "agy_project_id": None,
+            "agy_project_name": proposed_name,
+            "project_roots": real_roots if real_roots else roots,
+            "git_default_branch": git_branch,
+            "codex_project_id": cp["id"],
+            "codex_project_name": cp["name"],
+            "default_selected": (not is_virtual) and (len(active_m) > 0 or len(archived_m) > 0),
             "active_threads_default_selected": True,
             "archived_threads_default_selected": False,
-            "active_threads_count": len(active_migratable),
-            "archived_threads_count": len(archived_migratable),
-            "already_migrated_count": len(already_migrated),
-            "active_threads": active_migratable,
-            "archived_threads": archived_migratable,
-        })
+            "active_threads_count": len(active_m),
+            "archived_threads_count": len(archived_m),
+            "already_migrated_count": len(already_m),
+            "active_threads": active_m,
+            "archived_threads": archived_m,
+        }
+        if is_virtual:
+            virtual_or_scratch.append(entry)
+        else:
+            new_codex_projects.append(entry)
 
-    unmatched_codex = [
-        {"codex_project_id": cp["id"], "codex_project_name": cp["name"], "codex_roots": cp["roots"]}
-        for cp in codex_projects
-        if cp["id"] not in matched_codex_ids
-    ]
-
+    # Keep `matched_projects` as combined list for backward compatibility
+    combined = existing_same_path + new_codex_projects
     return {
-        "matched_projects": matched_projects,
-        "unmatched_codex_projects": unmatched_codex,
+        "existing_same_path": existing_same_path,
+        "new_codex_projects": new_codex_projects,
+        "virtual_or_scratch_projects": virtual_or_scratch,
+        "matched_projects": combined,
     }
 
 

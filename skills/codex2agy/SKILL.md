@@ -2,88 +2,112 @@
 name: codex2agy
 description: >-
   Interactively discover, compare, and safely migrate Codex prompts (AGENTS.md and prompts/*.md),
-  skills, memory summaries, compatible local third-party Codex plugins/MCP servers, and matching
-  same-project conversations (active + optional archived) into Antigravity. Supports strict
-  session idempotency (never syncs a session twice), interrupt auto-rollback, and batch undo.
+  skills, memory summaries, compatible local third-party Codex plugins/MCP servers, and projects
+  + sessions (same-path projects and Codex-only local projects, active + optional archived) into
+  Antigravity. Supports strict session idempotency, interrupt auto-rollback, and batch undo.
 ---
 
 # codex2agy — Safe, Transactional Codex-to-Antigravity Migrator
 
-Migrate user assets from `~/.codex/` (and `~/.agents/skills/`) into **one dedicated Antigravity plugin** (default: `~/.gemini/config/plugins/codex-imported/`), and sync matching same-project conversations into the corresponding Antigravity Projects via `ConversationService`.
+Migrate user assets from `~/.codex/` (and `~/.agents/skills/`) into the dedicated Antigravity plugin `~/.gemini/config/plugins/codex-imported/` (default; **do NOT ask the user to confirm the target plugin name** unless they explicitly ask to customize it), and sync projects + conversations via `ConversationService`.
 
 ## Hard Guarantees (Enforced in Code)
 
 1. **Read-only on source**: Never edit, move, or delete anything under `~/.codex/` or `~/.agents/`.
-2. **Never overwrite**: Existing Skills, Rules, MCP servers, transcripts, or conversations are automatically skipped.
+2. **Never overwrite**: Existing Skills, Rules, MCP servers, Projects, transcripts, or conversations are automatically skipped.
 3. **Strict Session Idempotency (数据幂等)**:
-   - Backed by a zero-dependency, human-readable atomic JSON ledger (`~/.gemini/antigravity/plugin_data/codex2agy/migration_ledger.json`, atomic `tmp + fsync + os.replace`), a cross-platform `O_CREAT|O_EXCL` exclusive lockfile (works on macOS/Linux/Windows with stale-PID recovery), plus live Antigravity `codex-thread:<id>` tag & disk checks.
-   - Even if the user accidentally triggers sync twice, runs concurrently, or changes the target plugin name, **the same Codex session can NEVER be synced more than once**.
+   - Backed by a zero-dependency, human-readable atomic JSON ledger (`~/.gemini/antigravity/plugin_data/codex2agy/migration_ledger.json`, atomic `tmp + fsync + os.replace`), a cross-platform `O_CREAT|O_EXCL` exclusive lockfile, plus live Antigravity `codex-thread:<id>` tag & disk checks.
+   - The same Codex session can NEVER be synced more than once.
 4. **Interrupt Auto-Rollback (中断默认撤销)**:
-   - Receiving `SIGINT` / `SIGTERM` or hitting a mid-run failure **automatically rolls back** every file, MCP entry, ledger reservation, and Antigravity conversation created in that run, leaving zero partial/dirty state.
+   - Receiving `SIGINT` / `SIGTERM` or hitting a mid-run failure automatically rolls back every file, newly created Antigravity project JSON, MCP entry, ledger reservation, and conversation created in that run.
 5. **Reversible Undo (撤回/撤销)**:
-   - Every committed or interrupted run has a `run_id` recorded in the ledger and can be undone at any time via `rollback_migration.py` (only removes resources created by that run; never touches pre-existing user files; releases rolled-back session IDs so they can be re-synced cleanly later if desired).
+   - Every run has a `run_id` and can be cleanly undone via `rollback_migration.py`.
 6. **Never write before confirmation / Never echo secrets**.
 
 ---
 
 ## Step 1: Discover (Read-Only Scan)
 
-Run the bundled scanner script relative to this skill directory (e.g., `./scripts/scan_codex.py`, typically `~/.gemini/config/plugins/codex2agy/skills/codex2agy/scripts/scan_codex.py`):
+Run the bundled scanner script relative to this skill directory (typically `~/.gemini/config/plugins/codex2agy/skills/codex2agy/scripts/scan_codex.py`):
 
 ```bash
 python3 <skill_dir>/scripts/scan_codex.py --pretty
 ```
 
-If `incomplete_runs` is non-empty (e.g., a prior process was hard-killed with `SIGKILL`), alert the user immediately and offer to roll back that incomplete `run_id` first using `rollback_migration.py --run-id <RUN_ID>`.
+If `incomplete_runs` is non-empty, alert the user and offer to roll back that incomplete `run_id` first.
 
 ---
 
-## Step 2: Present Findings & Collect User Selections
+## Step 2: Present Findings & Collect User Confirmation (Self-Explanatory, Zero Jargon)
 
-Present the scan results in **5 structured sections** matching these exact defaults:
+**UX Rules for presenting Step 2 (CRITICAL):**
+- **Do NOT ask the user to confirm the target plugin name** (`codex-imported` is automatic; only mention in passing that migrated items go into an isolated reversible plugin).
+- **Never use cryptic option numbers like "或选 2 / 3 / 4" without spelling out what each choice does in plain words.** Every selectable option must be self-explanatory at a glance.
+- **Keep the confirmation concise and scannable** so the user can either reply `按默认执行` in one second or state specific adjustments clearly.
 
-### Section 1 — Prompts & Instructions (`default: DO NOT migrate`)
-- Show discovered `~/.codex/AGENTS.md` (size, headings/preview, warn if > 24 KB) and `~/.codex/prompts/*.md`.
-- Explicitly mark **default = Do not migrate (不迁移)**.
+Present these **5 sections** with their exact defaults:
 
-### Section 2 — Skills (`default: ALL non-duplicate selected`)
-- List net-new skills from `~/.codex/skills/` (excluding `.system/`), `~/.agents/skills/`, and `~/.codex/memories/skills/`.
-- Mark **default = ALL selected**, and report skipped duplicates separately.
+### 1. 提示词（`AGENTS.md` / `prompts/*.md`）— 默认：**不迁移**
+- Show file name, size, and short preview (warn if > 24 KB).
+- State clearly: **默认不迁移**（如需迁入为 Antigravity 规则，说明即可）。
 
-### Section 3 — Memory (`show Codex vs Antigravity comparison first`)
-Display the comparison table (Codex explicit `~/.codex/memories/` vs Antigravity Rules ≤ 24 KB / 20k tokens budget & on-demand Skills, no native `MEMORY.md` import API), show file sizes, and offer options (**default: skip**):
-1. Skip memory (default)
-2. Migrate compact `memory_summary.md` (`<= 24 KB`) as plugin Rules (`model_decision` recommended, or `always_on`)
-3. Create a read-only `codex-memory-lookup` skill
-4. Both (2 + 3)
+### 2. Skills — 默认：**全选净新增项**
+- List all net-new skills (name + source) and mention how many duplicate skills were automatically skipped.
 
-### Section 4 — Compatible Local 3rd-Party Plugins & MCP (`default: ALL compatible non-duplicate selected`)
-- List compatible plugin skills and stdio/Streamable-HTTP MCP servers as selectable options (**default: ALL selected**), skipping duplicates and built-in Codex runtime plugins (`openai-*`, `node_repl`, `hooks.json`, `rules/default.rules`, legacy SSE).
+### 3. 记忆（Memory）— 默认：**不迁移**
+Show a concise 2-line comparison of Codex (`~/.codex/memories/`) vs Antigravity (no native `MEMORY.md` import; relies on Rules ≤ 24 KB + on-demand Skills), list discovered summary sizes, and write out the **plain-language options** directly:
+- **不迁移（默认）**
+- **迁入精炼摘要**：把 ≤ 24 KB 的 `memory_summary.md` 转为按需触发的规则
+- **生成只读检索 Skill**：不复制大文件，需要查历史上下文时按需读取 `~/.codex/memories/`
+- **两者都要**
 
-### Section 5 — Matching Projects & Conversations (`same-project content sync`)
-- Show matched Antigravity Projects:
-  - **`exact_root` (强匹配 · 同目录，默认勾选)**
-  - **`same_name` (同名不同路径/未绑定目录，展示两端路径由用户确认)**
-- For each matched project, separate:
-  - **Active (unarchived) threads** (`default: selected` once project is confirmed)
-  - **Archived threads** (**`default: DO NOT migrate — optional, user explicitly chooses`**; migrated archived threads automatically preserve `archived: true` in Antigravity)
-  - **Already-migrated threads** (automatically skipped via idempotency ledger + tags)
-- Let user pick import mode (`transcript_and_context`, `transcript_and_empty_thread`, or `transcript_only`; recommend zero-model modes for batches > 20 threads).
+### 4. 兼容第三方插件（Skills + MCP）— 默认：**全选净新增项**
+- List compatible third-party plugin skills and MCP servers (skipping duplicates and Codex built-in runtimes like `node_repl` / `openai-*`).
 
-Ask once for all confirmations + destination plugin name (default `codex-imported`) and wait before Step 3.
+### 5. 项目与历史会话（按真实本地路径自动匹配）— 默认：**同步所有真实本地项目的未归档会话；已归档默认不迁**
+Use pure path-based matching — no confusing "same-name different-path" guesswork:
+- **已有同路径项目（直接同步会话）**：`projects.existing_same_path` — Codex 与 Antigravity 指向同一个本地目录，直接把会话同步进对应已有项目。列出：项目名、路径、未归档数（默认迁）、已归档数（默认不迁）。
+- **Codex 独有项目（自动在 Antigravity 新建项目并同步会话）**：`projects.new_codex_projects` — Codex 中有真实本地目录但 Antigravity 里还没有的项目，自动新建对应项目并同步会话（如遇重名会自动附加目录名区分）。列出：新项目名、路径、未归档数（默认迁）、已归档数（默认不迁）。
+- **虚拟 / 临时目录项目（默认跳过）**：`projects.virtual_or_scratch_projects`（如 `.chatgpt-projects` / `scratch-workspaces`），仅一行带过，默认不选。
+- **默认导入方式（无需用户费心选择，直接说明即可）**：
+  - 未归档会话默认 **可续聊模式**（导出完整 Markdown 档案 + 侧边栏创建带上下文交接的会话，点开即可接着聊；也可改选“轻量模式：零模型消耗仅建标题”或“仅导出 Markdown 档案”）。
+  - 若用户额外勾选 **已归档会话**，默认使用 **轻量归档模式**（导出完整 Markdown 档案 + 侧边栏建标题会话并保持 `archived: true`，零模型消耗）。
+
+### Confirmation Prompt Template
+End Step 2 with a crisp summary box so the user never has to scroll back up to decode numbers:
+
+> **请确认是否开始迁移**（直接回复 **`按默认执行`** 即可，或说明想调整的项）：
+> - **提示词（`AGENTS.md`）**：默认 **不迁移**（要迁请说“迁提示词”）
+> - **Skills（N 个）& 第三方插件/MCP（M 项）**：默认 **全选**（有要排除的请点名）
+> - **记忆（Memory）**：默认 **不迁移**（可选：**迁入精炼摘要** / **生成只读检索 Skill** / **两者都要**）
+> - **项目与会话**：默认同步上述 **同路径已有项目 + Codex 独有项目（自动新建）** 的 **未归档会话（可续聊模式）**；**已归档会话默认不迁**（要一起迁请说“包含已归档”，或点名只迁哪几个项目）
+
+Wait for explicit user confirmation before Step 3.
 
 ---
 
 ## Step 3: Apply Transactional Migration
 
-Write the confirmed plan JSON to `/tmp/codex2agy-plan.json` and execute:
+Write the confirmed plan JSON to `/tmp/codex2agy-plan.json` (`target_plugin_name` defaults to `"codex-imported"`). For each selected project in `project_migrations`, pass:
 
-```bash
-python3 ~/.gemini/config/plugins/codex2agy/skills/codex2agy/scripts/apply_migration.py --plan /tmp/codex2agy-plan.json
+```json
+{
+  "agy_project_id": "<existing-id-or-null>",
+  "agy_project_name": "<project-display-name>",
+  "create_project": false,
+  "project_roots": ["/abs/path/to/repo"],
+  "git_default_branch": "main",
+  "conversation_mode": "transcript_and_context",
+  "archived_conversation_mode": "transcript_and_empty_thread",
+  "threads": [...]
+}
 ```
 
-- Interrupting mid-run (`SIGINT` / `SIGTERM`) or encountering an error automatically reverts everything created during that run and reports `status: "interrupted_rolled_back"` / `"failed_rolled_back"`.
-- Always record and display the returned `run_id` to the user so they can undo later if needed.
+Execute:
+
+```bash
+python3 <skill_dir>/scripts/apply_migration.py --plan /tmp/codex2agy-plan.json
+```
 
 ---
 
@@ -91,25 +115,21 @@ python3 ~/.gemini/config/plugins/codex2agy/skills/codex2agy/scripts/apply_migrat
 
 Report concisely:
 - `run_id` and `status`
-- Created items (by category and per-Project active/archived counts)
+- Created items (including newly created Antigravity projects, per-project active/archived conversations, skills, rules, MCPs)
 - Skipped duplicates (`skipped_existing` & `skipped_idempotent`)
-- Link to destination plugin: `[<target-plugin-name>](customization://<target-plugin-name>)`
+- Direct link to destination plugin: `[codex-imported](customization://codex-imported)`
 - Remind the user they can say **"撤回刚才的迁移"** at any time.
 
 ---
 
 ## Undo / Rollback Workflow
 
-When the user asks to undo/rollback a migration (or inspect past runs):
+When the user asks to undo/rollback a migration:
 
-1. List runs:
-   ```bash
-   python3 ~/.gemini/config/plugins/codex2agy/skills/codex2agy/scripts/rollback_migration.py --list
-   ```
-2. Preview rollback (optional `--dry-run`) and confirm which `run_id` to revert, then execute:
-   ```bash
-   python3 ~/.gemini/config/plugins/codex2agy/skills/codex2agy/scripts/rollback_migration.py --latest
-   # or:
-   python3 ~/.gemini/config/plugins/codex2agy/skills/codex2agy/scripts/rollback_migration.py --run-id <RUN_ID>
-   ```
-3. Report every reverted file, MCP entry, and deleted Antigravity conversation, and confirm that the rolled-back Codex session IDs have been released from the idempotency ledger.
+```bash
+python3 <skill_dir>/scripts/rollback_migration.py --list
+python3 <skill_dir>/scripts/rollback_migration.py --latest
+# or --run-id <RUN_ID>
+```
+
+Rolling back removes all newly created files, newly created Antigravity project JSONs, added MCP entries, and created Antigravity conversations from that run, and releases those session IDs from the idempotency ledger.

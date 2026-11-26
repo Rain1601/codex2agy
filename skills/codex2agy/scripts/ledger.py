@@ -387,12 +387,13 @@ def rollback_run(
                     errors.append(f"Remove skill dir {tpath} failed: {exc}")
             continue
 
-        if kind in ("rule", "memory_rule", "project_transcript", "plugin_manifest") and tpath:
+        if kind in ("rule", "memory_rule", "project_transcript", "plugin_manifest", "agy_project_file") and tpath:
             if os.path.isfile(tpath):
                 try:
                     if not dry_run:
                         os.remove(tpath)
-                        _remove_empty_parents(os.path.dirname(tpath), target_plugin_dir)
+                        if kind != "agy_project_file":
+                            _remove_empty_parents(os.path.dirname(tpath), target_plugin_dir)
                     reverted.append({"kind": kind, "name": act.get("item_name"), "path": tpath})
                 except Exception as exc:
                     errors.append(f"Remove file {tpath} failed: {exc}")

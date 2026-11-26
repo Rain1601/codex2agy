@@ -20,6 +20,7 @@ import re
 import shutil
 import signal
 import sys
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -700,26 +701,109 @@ def main() -> int:
                             result["variables_required"][mname] = req_vars
                         result["created"].append({"kind": "mcp", "name": mname, "path": mcp_path})
 
-                # 5. Matching Project migrations (strict session-level idempotency)
+                # 5. Matching & New Project migrations (strict session-level idempotency)
                 seen_in_plan_threads: Set[str] = set()
                 readonly_ledger = JsonLedger(args.ledger_dir, readonly=True) if dry_run else None
+                projects_cfg_dir = os.path.join(gemini_config, "projects")
+
+                def find_existing_project_by_root(roots: List[str]) -> Optional[Tuple[str, str]]:
+                    norm_targets = {os.path.normpath(os.path.realpath(os.path.expanduser(r))) for r in roots if r}
+                    if not norm_targets or not os.path.isdir(projects_cfg_dir):
+                        return None
+                    for fn in os.listdir(projects_cfg_dir):
+                        if not fn.endswith(".json"):
+                            continue
+                        try:
+                            with open(os.path.join(projects_cfg_dir, fn), "r", encoding="utf-8") as f:
+                                pdata = json.load(f)
+                        except Exception:
+                            continue
+                        for res in (pdata.get("projectResources") or {}).get("resources") or []:
+                            uri = res.get("folderUri") or (res.get("gitFolder") or {}).get("folderUri")
+                            if isinstance(uri, str) and uri.startswith("file://"):
+                                nr = os.path.normpath(os.path.realpath(uri[len("file://") :]))
+                                if nr in norm_targets:
+                                    return pdata.get("id") or os.path.splitext(fn)[0], pdata.get("name") or ""
+                    return None
+
                 for pm in plan.get("project_migrations") or []:
-                    agy_pid = pm["agy_project_id"]
+                    agy_pid = pm.get("agy_project_id")
                     agy_pname = pm["agy_project_name"]
-                    mode = pm.get("conversation_mode") or "transcript_and_context"
-                    if mode not in ("transcript_and_context", "transcript_and_empty_thread", "transcript_only"):
-                        result["warnings"].append(f"Unknown conversation_mode '{mode}' for project {agy_pname}; skipped")
+                    create_proj = bool(pm.get("create_project", False))
+                    proj_roots = pm.get("project_roots") or []
+                    git_branch = pm.get("git_default_branch")
+                    active_mode = pm.get("conversation_mode") or "transcript_and_context"
+                    archived_mode = pm.get("archived_conversation_mode") or (
+                        "transcript_and_empty_thread" if active_mode == "transcript_and_context" else active_mode
+                    )
+
+                    valid_modes = ("transcript_and_context", "transcript_and_empty_thread", "transcript_only")
+                    if active_mode not in valid_modes or archived_mode not in valid_modes:
+                        result["warnings"].append(f"Unknown conversation_mode for project {agy_pname}; skipped")
                         continue
+
+                    # Auto-create Antigravity project if requested and not already present for same path
+                    if create_proj or not agy_pid:
+                        existing_hit = find_existing_project_by_root(proj_roots)
+                        if existing_hit:
+                            agy_pid, agy_pname = existing_hit
+                        else:
+                            agy_pid = str(uuid.uuid4())
+                            resources = []
+                            for r in proj_roots:
+                                if not r:
+                                    continue
+                                abs_r = os.path.abspath(os.path.expanduser(r))
+                                file_uri = "file://" + abs_r.replace("\\", "/")
+                                if git_branch or os.path.exists(os.path.join(abs_r, ".git")):
+                                    resources.append({
+                                        "gitFolder": {
+                                            "folderUri": file_uri,
+                                            "defaultBranch": git_branch or "main",
+                                        }
+                                    })
+                                else:
+                                    resources.append({"folderUri": file_uri})
+                            proj_payload = {
+                                "id": agy_pid,
+                                "name": agy_pname,
+                                "projectResources": {"resources": resources} if resources else {},
+                                "permissionGrants": {"v2Migrated": True},
+                                "settings": {},
+                                "isWorkspaceOnly": False,
+                            }
+                            proj_file = os.path.join(projects_cfg_dir, f"{agy_pid}.json")
+                            if not dry_run:
+                                os.makedirs(projects_cfg_dir, exist_ok=True)
+                                with open(proj_file, "w", encoding="utf-8") as f:
+                                    json.dump(proj_payload, f, ensure_ascii=False, indent=2)
+                                    f.write("\n")
+                                # Brief wait so running Antigravity LS hot-loads the newly created project JSON
+                                time.sleep(0.35)
+                            journal.record(
+                                "agy_project_file",
+                                item_name=agy_pname,
+                                target_path=proj_file,
+                                agy_project_id=agy_pid,
+                            )
+                            result["created"].append({
+                                "kind": "agy_project",
+                                "name": agy_pname,
+                                "agy_project_id": agy_pid,
+                                "path": proj_file,
+                                "project_roots": proj_roots,
+                            })
 
                     safe_proj_dir = re.sub(r"[^A-Za-z0-9._-]+", "_", agy_pname)
                     export_dir = os.path.join(target_dir, "project_imports", safe_proj_dir)
-                    imported_ids = list_imported_codex_thread_ids_by_project(agy_pid)
+                    imported_ids = list_imported_codex_thread_ids_by_project(agy_pid) if agy_pid else set()
 
                     for t in pm.get("threads") or []:
                         tid = t["thread_id"]
                         title = (t.get("title") or f"Codex {tid[:8]}").strip()[:100]
                         archived = bool(t.get("archived", False))
                         pinned = bool(t.get("is_pinned", False))
+                        mode = archived_mode if archived else active_mode
                         transcript_path = os.path.join(export_dir, f"{tid}.md")
 
                         # Guard 1: duplicate inside the same plan payload

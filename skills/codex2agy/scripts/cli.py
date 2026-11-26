@@ -113,16 +113,32 @@ def print_scan_summary(data: Dict[str, Any]) -> None:
     for i, m in enumerate(tp_mcps, 1):
         print(f"   [M{i}] {green(m['name'])} " + dim(f"(MCP {m['transport']}, {m.get('plugin_source', m.get('source_kind'))})"))
 
-    # 5. Projects
-    projs = data.get("projects", {}).get("matched_projects") or []
-    print(bold(f"\n5. 同名 / 同项目 Project 会话: 匹配到 {len(projs)} 个项目"))
-    for i, p in enumerate(projs, 1):
-        tag = green("同目录强匹配·默认选") if p["match_type"] == "exact_root" else yellow("同名不同路径·需确认")
-        print(
-            f"   [{i}] {bold(p['agy_project_name'])} [{tag}] "
-            f"未归档 {p['active_threads_count']} 条 / 已归档 {p['archived_threads_count']} 条 "
-            + dim(f"(已迁移跳过 {p['already_migrated_count']} 条)")
-        )
+    # 5. Projects (path-based: existing same-path + new Codex-only projects)
+    pinfo = data.get("projects") or {}
+    same_path = pinfo.get("existing_same_path") or []
+    new_projs = pinfo.get("new_codex_projects") or []
+    virt_projs = pinfo.get("virtual_or_scratch_projects") or []
+    print(bold(f"\n5. 项目与历史会话 (按本地路径自动匹配，未归档默认迁 / 已归档默认不迁):"))
+    if same_path:
+        print(green(f"   已有同路径项目 ({len(same_path)} 个 · 直接合并会话):"))
+        for i, p in enumerate(same_path, 1):
+            root_str = (p.get("project_roots") or [""])[0]
+            print(
+                f"     [E{i}] {bold(p['agy_project_name'])} "
+                f"未归档 {p['active_threads_count']} 条 / 已归档 {p['archived_threads_count']} 条 "
+                + dim(f"({root_str}, 已迁跳过 {p['already_migrated_count']})")
+            )
+    if new_projs:
+        print(cyan(f"   Codex 独有项目 ({len(new_projs)} 个 · 自动在 Antigravity 新建项目并同步会话):"))
+        for i, p in enumerate(new_projs, 1):
+            root_str = (p.get("project_roots") or [""])[0]
+            print(
+                f"     [N{i}] {bold(p['agy_project_name'])} "
+                f"未归档 {p['active_threads_count']} 条 / 已归档 {p['archived_threads_count']} 条 "
+                + dim(f"({root_str}, 已迁跳过 {p['already_migrated_count']})")
+            )
+    if virt_projs:
+        print(dim(f"   虚拟/临时目录项目 ({len(virt_projs)} 个 · 默认跳过): " + ", ".join(p["codex_project_name"] for p in virt_projs)))
     print()
 
 
@@ -241,55 +257,59 @@ def build_plan_interactive(data: Dict[str, Any], args: argparse.Namespace) -> Di
             else:
                 selected_mcps.append(entry["item"])
 
-    # 5. Matching Projects (exact_root default selected, archived default NOT selected)
-    matched_projs = data.get("projects", {}).get("matched_projects") or []
+    # 5. Projects: existing same-path + new Codex-only projects (default ALL real local projects selected; archived default NOT selected)
+    pinfo = data.get("projects") or {}
+    real_projs = (pinfo.get("existing_same_path") or []) + (pinfo.get("new_codex_projects") or [])
     project_migrations: List[Dict[str, Any]] = []
-    if matched_projs:
+    if real_projs:
         if auto_yes:
-            picked_projs = [p for p in matched_projs if p["match_type"] == "exact_root"]
+            picked_projs = [p for p in real_projs if p.get("default_selected", True)]
         else:
-            print(bold(f"\n[5/5] 同名 / 同项目 Project 内容迁移"))
-            default_nums = [str(i) for i, p in enumerate(matched_projs, 1) if p["match_type"] == "exact_root"]
-            for i, p in enumerate(matched_projs, 1):
-                tag = green("强匹配·默认") if p["match_type"] == "exact_root" else yellow("同名需确认")
+            print(bold(f"\n[5/5] 项目与历史会话 (默认全选以下 {len(real_projs)} 个真实本地项目，仅同步未归档会话)"))
+            for i, p in enumerate(real_projs, 1):
+                tag = green("同路径·直接同步") if not p.get("create_project") else cyan("Codex 独有·自动新建项目")
+                root_str = (p.get("project_roots") or [""])[0]
                 print(
                     f"  {i}. {bold(p['agy_project_name'])} [{tag}] "
                     f"未归档 {p['active_threads_count']} / 已归档 {p['archived_threads_count']} "
-                    + dim(f"| AGY={p['agy_roots']} vs Codex={p['codex_roots']}")
+                    + dim(f"| {root_str}")
                 )
-            def_hint = ",".join(default_nums) if default_nums else "none"
-            ans = ask(f"选择要同步的项目编号 (直接回车={def_hint}，输入 `all` / `none` / 编号): ")
-            if not ans:
-                picked_projs = [p for p in matched_projs if p["match_type"] == "exact_root"]
-            else:
-                picked_projs = [matched_projs[i] for i in parse_index_selection(ans, len(matched_projs), default_all=False)]
+            ans = ask("直接回车全选，或输入编号 / `-编号` 排除 / `none` 跳过 [默认全选]: ")
+            picked_projs = [real_projs[i] for i in parse_index_selection(ans, len(real_projs), default_all=True)]
 
         if picked_projs:
             include_archived = args.include_archived
             if not auto_yes and any(p["archived_threads_count"] > 0 for p in picked_projs):
                 total_arch = sum(p["archived_threads_count"] for p in picked_projs)
-                a_ans = ask(f"选中项目共有 {total_arch} 条【已归档】会话，是否一并迁移？[y/N，默认不迁]: ", default="n").lower()
+                a_ans = ask(f"选中项目共有 {total_arch} 条【已归档】会话，是否一并迁移？(迁入后仍保持已归档，零模型消耗) [y/N，默认不迁]: ", default="n").lower()
                 include_archived = a_ans in ("y", "yes")
 
             if ls_available:
-                mode = "transcript_and_context"
+                active_mode = "transcript_and_context"
+                archived_mode = "transcript_and_empty_thread"
                 if not auto_yes:
-                    print("  导入模式: 1=完整档案+可续聊上下文(默认)  2=完整档案+零模型空会话  3=仅导出 Markdown 档案")
-                    m_ans = ask("请选择导入模式 [1/2/3，默认 1]: ", default="1")
-                    mode = {"1": "transcript_and_context", "2": "transcript_and_empty_thread", "3": "transcript_only"}.get(m_ans, "transcript_and_context")
+                    print("  未归档会话导入方式: 1=可续聊模式(导出完整档案+侧边栏带上下文会话，默认)  2=轻量模式(仅建标题会话，零模型消耗)  3=仅导出 Markdown 档案")
+                    m_ans = ask("请选择 [1/2/3，默认 1]: ", default="1")
+                    active_mode = {"1": "transcript_and_context", "2": "transcript_and_empty_thread", "3": "transcript_only"}.get(m_ans, "transcript_and_context")
+                    archived_mode = "transcript_only" if active_mode == "transcript_only" else "transcript_and_empty_thread"
             else:
-                mode = "transcript_only"
-                print(yellow("  [提示] 当前为独立外部终端（未检测到 Antigravity LS 会话接口），项目会话将自动使用 `transcript_only` 仅导出 Markdown 档案；如需直接写入侧边栏会话请在 Antigravity 对话或内置终端内运行。"))
+                active_mode = "transcript_only"
+                archived_mode = "transcript_only"
+                print(yellow("  [提示] 当前为独立外部终端（未检测到 Antigravity LS 会话接口），项目会话将自动导出为 Markdown 档案，新建项目配置会正常写入；如需同时写入侧边栏会话请在 Antigravity 对话或内置终端内运行。"))
 
             for p in picked_projs:
                 threads = list(p["active_threads"])
                 if include_archived:
                     threads.extend(p["archived_threads"])
-                if threads:
+                if threads or p.get("create_project"):
                     project_migrations.append({
-                        "agy_project_id": p["agy_project_id"],
+                        "agy_project_id": p.get("agy_project_id"),
                         "agy_project_name": p["agy_project_name"],
-                        "conversation_mode": mode,
+                        "create_project": bool(p.get("create_project", False)),
+                        "project_roots": p.get("project_roots") or [],
+                        "git_default_branch": p.get("git_default_branch"),
+                        "conversation_mode": active_mode,
+                        "archived_conversation_mode": archived_mode,
                         "threads": threads,
                     })
 
