@@ -57,16 +57,29 @@ If `incomplete_runs` is non-empty, alert the user and offer to roll back that in
 - First output a **compact, scannable summary** of the 5 scanned categories (counts + names, showing Codex vs Antigravity memory comparison in 2 lines, and distinguishing `existing_same_path` vs `new_codex_projects` by real local path).
 - **In the same turn**, call **`ask_question`** with clickable cards!
 
-### Recommended `ask_question` Card Layout (Single Call, Up to 4 Crisp Questions)
+### Recommended `ask_question` Card Layout (Zero-Friction Progressive Disclosure)
 
-Only include a question if that category has discovered migratable items:
+**CRITICAL**: Do NOT dump 6+ mixed items into a single Multi-select card without a one-click "Sync all" option — users shouldn't have to click 6 checkboxes just to accept the default!
 
-1. **Q1 — Prompts (`is_multi_select: false`)** *(only if prompts/AGENTS.md found)*:
+Use **4 fast single-select questions** where option 1 is ALWAYS the `(Recommended)` default, so users can simply accept option 1 across the board in 3 seconds — and only branch into a second multi-select card if they pick "Customize":
+
+1. **Q1 — Sync Scope (`is_multi_select: false`)**:
+   - ZH Question: `选择本次同步范围（以下均已自动排除重复项）`
+     - Options:
+       - `(Recommended) 一键同步全部推荐项（N 个 Skills + M 项插件/MCP + P 个本地项目未归档会话）`
+       - `只同步 Skills 与第三方插件/MCP（不同步项目会话）`
+       - `自定义勾选具体模块与项目（下一步精细选择）`
+   - EN Question: `Choose what to sync (duplicates already excluded)`
+     - Options:
+       - `(Recommended) Sync all recommended items (N Skills + M plugins/MCP + P local projects' active chats)`
+       - `Sync Skills & 3rd-party plugins/MCP only (skip project chats)`
+       - `Customize specific modules and projects in the next step`
+2. **Q2 — Prompts (`is_multi_select: false`)** *(include only if prompts/AGENTS.md found)*:
    - ZH Question: `提示词（AGENTS.md 等）是否迁移？`
      - Options: `(Recommended) 不迁移（跳过）`, `迁移为 Antigravity 常驻规则`
    - EN Question: `Migrate Codex prompts (AGENTS.md)?`
      - Options: `(Recommended) Skip prompts`, `Migrate as always-on Antigravity rule`
-2. **Q2 — Memory (`is_multi_select: false`)** *(only if memory summaries/files found)*:
+3. **Q3 — Memory (`is_multi_select: false`)** *(include only if memory summaries/files found)*:
    - ZH Question: `记忆（Memory）如何处理？（Antigravity 无原生 MEMORY.md 导入接口）`
      - Options:
        - `(Recommended) 不迁移（跳过）`
@@ -79,28 +92,19 @@ Only include a question if that category has discovered migratable items:
        - `Migrate compact summaries as on-demand Rules (<=24KB)`
        - `Create read-only lookup Skill (reads ~/.codex/memories/ on demand)`
        - `Both summary Rules and lookup Skill`
-3. **Q3 — Skills, 3rd-Party Plugins & Projects (`is_multi_select: true`)**:
-   - Let the user click-select all high-level bundles/projects they want synced, putting the full recommended bundle first or listing each clean group so it's effortless:
-   - ZH Question: `选择要同步的模块与项目`
-     - Options (list discovered groups clearly):
-       - `(Recommended) 净新增 Skills（N 个，已跳过重复）`
-       - `兼容第三方插件 Skills & MCP（M 项）`
-       - `已有同路径项目：<name1>、<name2>（直接合并未归档会话）`
-       - `Codex 独有项目：<name3>、<name4>（自动在 Antigravity 新建项目并同步未归档会话）`
-       *(If there are <= 4 projects total, you may also list each project as its own checkbox option for finer control.)*
-   - EN Question: `Select categories and projects to sync`
-     - Options matching the discovered items above in plain English.
-4. **Q4 — Archived Project Sessions (`is_multi_select: false`)** *(only if selected/discovered projects have `archived_threads_count > 0`)*:
+4. **Q4 — Archived Project Sessions & Mode (`is_multi_select: false`)** *(include if projects have archived threads, or for dry-run option)*:
    - ZH Question: `项目的「已归档」历史会话是否一并迁移？（共 K 条）`
      - Options:
-       - `(Recommended) 不迁移已归档会话（仅迁未归档，默认可续聊模式）`
+       - `(Recommended) 不迁移已归档（仅迁未归档会话，可续聊模式）`
        - `一并迁移已归档会话（保持已归档状态，零模型消耗）`
        - `仅演练预览（--dry-run，不写入任何文件）`
    - EN Question: `Include archived project sessions too? (K total)`
      - Options:
-       - `(Recommended) Skip archived sessions (sync active sessions only, continuable mode)`
+       - `(Recommended) Skip archived sessions (active sessions only, continuable mode)`
        - `Include archived sessions (preserve archived state, zero model calls)`
        - `Dry-run preview only (write nothing)`
+
+**Only if the user selects "Customize" in Q1**: Send a follow-up `ask_question` with `is_multi_select: true` where **option 1 is `(Recommended) 全选以下全部` / `(Recommended) Select all below`**, followed by each individual category/project cleanly separated (Skills, 3rd-party Plugins/MCP, each existing same-path project, each Codex-only project).
 
 Wait for the user's card selections before Step 3.
 
