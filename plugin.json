@@ -1,0 +1,21 @@
+{
+  "name": "codex2agy",
+  "displayName": "Codex to Antigravity Migrator",
+  "version": "1.0.0",
+  "logo": "assets/logo.png",
+  "description": "Interactively scan, compare, and safely sync Codex prompts, skills, memory summaries, compatible local plugins/MCP servers, and matching project sessions into Antigravity without overwriting existing items.",
+  "author": {
+    "name": "Rain1601",
+    "url": "https://github.com/Rain1601"
+  },
+  "homepage": "https://github.com/Rain1601/codex2agy",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rain1601/codex2agy"
+  },
+  "suggestedPrompts": [
+    "把我的 Codex 配置和 Skills 增量同步到 Antigravity",
+    "扫描 Codex 里有哪些 Skills 和插件在 Antigravity 里缺失",
+    "对比 Codex 和 Antigravity 的记忆支持情况并按需迁移"
+  ]
+}
