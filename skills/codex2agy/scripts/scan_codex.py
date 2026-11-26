@@ -6,13 +6,16 @@ Never modifies any file and never prints secret values (tokens/keys/env values).
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 try:
     import sqlite3
@@ -20,6 +23,52 @@ except ImportError:
     sqlite3 = None  # type: ignore
 
 from ledger import get_incomplete_runs, get_synced_session_ids
+
+
+@contextlib.contextmanager
+def open_codex_sqlite_readonly(db_path: str) -> Iterator[Optional[Any]]:
+    """Open a Codex SQLite DB safely even while Codex holds WAL locks.
+
+    Tries direct read-only open first; falls back to copying db + wal/shm into a
+    short-lived temp directory so live Codex processes are never blocked or disturbed.
+    """
+    if sqlite3 is None or not os.path.isfile(db_path):
+        yield None
+        return
+
+    tmp_dir: Optional[str] = None
+    con = None
+    try:
+        try:
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=3)
+            con.execute("SELECT 1").fetchone()
+        except Exception:
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+                con = None
+            tmp_dir = tempfile.mkdtemp(prefix="codex2agy_ro_")
+            dst = os.path.join(tmp_dir, os.path.basename(db_path))
+            shutil.copy2(db_path, dst)
+            for suf in ("-wal", "-shm"):
+                src_side = db_path + suf
+                if os.path.isfile(src_side):
+                    try:
+                        shutil.copy2(src_side, dst + suf)
+                    except OSError:
+                        pass
+            con = sqlite3.connect(dst, timeout=3)
+        yield con
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 RULE_BYTE_LIMIT = 24000
 BUILTIN_CODEX_MARKETPLACES = {
@@ -727,33 +776,36 @@ def scan_matching_projects(
     if sqlite3 is None or not os.path.isfile(state_db):
         return {"matched_projects": [], "unmatched_codex_projects": []}
 
-    con = sqlite3.connect(f"file:{state_db}?mode=ro", uri=True)
     codex_projects: List[Dict[str, Any]] = []
+    thread_rows: List[Tuple[Any, ...]] = []
     try:
-        prows = con.execute("SELECT id, name FROM projects ORDER BY position ASC").fetchall()
-        root_map: Dict[str, List[str]] = {}
-        for pid, path in con.execute("SELECT project_id, path FROM project_roots ORDER BY position ASC").fetchall():
-            root_map.setdefault(pid, []).append(path)
-        for pid, pname in prows:
-            roots = root_map.get(pid, [])
-            codex_projects.append({
-                "id": pid,
-                "name": pname,
-                "roots": roots,
-                "norm_roots": [norm_path(r) for r in roots if r],
-            })
+        with open_codex_sqlite_readonly(state_db) as con:
+            if con is None:
+                return {"matched_projects": [], "unmatched_codex_projects": []}
+            prows = con.execute("SELECT id, name FROM projects ORDER BY position ASC").fetchall()
+            root_map: Dict[str, List[str]] = {}
+            for pid, path in con.execute("SELECT project_id, path FROM project_roots ORDER BY position ASC").fetchall():
+                root_map.setdefault(pid, []).append(path)
+            for pid, pname in prows:
+                roots = root_map.get(pid, [])
+                codex_projects.append({
+                    "id": pid,
+                    "name": pname,
+                    "roots": roots,
+                    "norm_roots": [norm_path(r) for r in roots if r],
+                })
 
-        # Fetch all top-level user threads (exclude subagent JSON sources and attached child threads)
-        thread_rows = con.execute(
-            """
-            SELECT id, title, cwd, archived, is_pinned, source, rollout_path, updated_at, project_id
-            FROM threads
-            WHERE source NOT LIKE '{%' AND attached_thread_parent_id IS NULL
-            ORDER BY updated_at DESC
-            """
-        ).fetchall()
-    finally:
-        con.close()
+            # Fetch all top-level user threads (exclude subagent JSON sources and attached child threads)
+            thread_rows = con.execute(
+                """
+                SELECT id, title, cwd, archived, is_pinned, source, rollout_path, updated_at, project_id
+                FROM threads
+                WHERE source NOT LIKE '{%' AND attached_thread_parent_id IS NULL
+                ORDER BY updated_at DESC
+                """
+            ).fetchall()
+    except Exception:
+        return {"matched_projects": [], "unmatched_codex_projects": []}
 
     all_threads: List[Dict[str, Any]] = []
     for tid, title, cwd, archived, is_pinned, source, rollout_path, updated_at, proj_id in thread_rows:
@@ -927,11 +979,11 @@ def scan_non_migratable_extras(codex_home: str) -> Dict[str, Any]:
             db_path = os.path.join(codex_home, "sqlite", db_name)
             if os.path.isfile(db_path):
                 try:
-                    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-                    row = con.execute("SELECT count(*) FROM automations").fetchone()
-                    if row and row[0]:
-                        auto_count += int(row[0])
-                    con.close()
+                    with open_codex_sqlite_readonly(db_path) as con:
+                        if con is not None:
+                            row = con.execute("SELECT count(*) FROM automations").fetchone()
+                            if row and row[0]:
+                                auto_count += int(row[0])
                 except Exception:
                     pass
     extras["automations_count"] = auto_count
